@@ -99,6 +99,8 @@ jobs:
       #              ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       #   UnicodeEncodeError: 'charmap' codec can't encode characters in position 14-41: character maps to <undefined>
       PYTHONIOENCODING: UTF-8
+      # Show failed, errors, and rerun lines in the short summary (pytest-rerunfailures).
+      PYTEST_ADDOPTS: "-r fEr"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -140,8 +142,20 @@ jobs:
         run: wsl --update
       - name: Smoke test
         run: poetry run dangerzone-cli .\tests\test_docs\sample-pdf.pdf --ocr-lang eng --debug
+      - name: Prepare test results directory
+        shell: bash
+        run: mkdir -p test-results
       - name: Run CLI tests
+        env:
+          EXTRA_PYTEST_ARGS: --junitxml=test-results/junit.xml
         run: poetry run make test
+      - name: Upload pytest JUnit (Windows)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-junit-windows-${{ matrix.runner }}
+          path: test-results/junit.xml
+          if-no-files-found: ignore
       - name: Set up .NET CLI environment
         uses: actions/setup-dotnet@v5
         with:
@@ -535,7 +549,15 @@ jobs:
             ./dev_scripts/env.py \
               --distro ${{ matrix.distro }} --version ${{ matrix.version }} \
               run --dev --no-network \
-              bash -c 'cd dangerzone; poetry run make test'
+              bash -c 'cd dangerzone && export PYTEST_ADDOPTS="-r fEr" && mkdir -p test-results && export EXTRA_PYTEST_ARGS="--junitxml=test-results/junit.xml" && poetry run make test'
+
+      - name: Upload pytest JUnit (Linux matrix)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-junit-${{ matrix.distro }}-${{ matrix.version }}
+          path: test-results/junit.xml
+          if-no-files-found: ignore
 
       - name: Upload PDF diffs
         uses: actions/upload-artifact@v7

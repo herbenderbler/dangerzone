@@ -7,6 +7,33 @@ from typing import Callable, List, Optional, TextIO, Tuple
 DEFAULT_DPI = 150  # Pixels per inch
 INT_BYTES = 2
 
+# Cap subprocess log bytes embedded in error messages (CI and debug).
+_MAX_SUBPROCESS_LOG_CHARS = 12000
+
+
+def _format_subprocess_failure(
+    error_message: str,
+    exit_code: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> str:
+    """Build a single message with exit status and clipped stdout/stderr."""
+
+    def _clip(label: str, data: bytes) -> str:
+        if not data:
+            return f"{label}: (empty)\n"
+        text = data.decode("utf-8", errors="replace")
+        if len(text) > _MAX_SUBPROCESS_LOG_CHARS:
+            text = "(truncated)\n" + text[-_MAX_SUBPROCESS_LOG_CHARS:]
+        return f"{label}:\n{text}\n"
+
+    parts = [
+        f"{error_message} (exit code {exit_code})",
+        _clip("stdout", stdout),
+        _clip("stderr", stderr),
+    ]
+    return "\n".join(parts)
+
 
 def running_on_qubes() -> bool:
     # https://www.qubes-os.org/faq/#what-is-the-canonical-way-to-detect-qubes-vm
@@ -90,11 +117,15 @@ class DangerzoneConverter:
         error_message: str,
         stdout_callback: Optional[Callable] = None,
         stderr_callback: Optional[Callable] = None,
+        timeout: Optional[float] = None,
     ) -> Tuple[bytes, bytes]:
         """Run a command and get its output.
 
         Run a command using asyncio.subprocess, consume its standard streams, and return its
         output in bytes.
+
+        :param timeout: If set, seconds to wait for the process to exit (then streams are
+            drained). On expiry the process is killed.
 
         :raises RuntimeError: if the process returns a non-zero exit status
         """
@@ -122,16 +153,36 @@ class DangerzoneConverter:
             self.read_stream(proc.stderr, stderr_callback)
         )
 
-        # Wait until the command has finished. Then, verify that the command
-        # has completed successfully. In any other case, raise an exception.
-        ret = await proc.wait()
-        if ret != 0:
-            raise RuntimeError(error_message)
+        # Wait until the command has finished, then drain stdout/stderr. We must await
+        # the stream tasks even on failure so stderr is available in error messages.
+        try:
+            if timeout is not None:
+                ret = await asyncio.wait_for(proc.wait(), timeout=timeout)
+            else:
+                ret = await proc.wait()
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+            stdout = await stdout_task
+            stderr = await stderr_task
+            raise RuntimeError(
+                _format_subprocess_failure(
+                    f"{error_message} (timed out after {timeout} seconds)",
+                    -1,
+                    stdout,
+                    stderr,
+                )
+            )
 
-        # Wait until the tasks that consume the command's standard streams have exited as
-        # well, and return their output.
         stdout = await stdout_task
         stderr = await stderr_task
+        if ret != 0:
+            raise RuntimeError(
+                _format_subprocess_failure(error_message, ret, stdout, stderr)
+            )
         return (stdout, stderr)
 
     @abstractmethod

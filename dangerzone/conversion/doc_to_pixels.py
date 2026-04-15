@@ -199,6 +199,7 @@ class DocumentToPixels(DangerzoneConverter):
             await self.run_command(
                 args,
                 error_message="Conversion to PDF with LibreOffice failed",
+                timeout=300.0,
             )
             pdf_filename = "/tmp/input_file.pdf"
             # XXX: Sometimes, LibreOffice can fail with status code 0. So, we need to
@@ -206,7 +207,17 @@ class DocumentToPixels(DangerzoneConverter):
             #
             #     https://github.com/freedomofpress/dangerzone/issues/494
             if not os.path.exists(pdf_filename):
-                raise errors.LibreofficeFailure()
+                tail = (
+                    self.captured_output[-8000:]
+                    if len(self.captured_output) > 8000
+                    else self.captured_output
+                )
+                detail = tail.decode("utf-8", errors="replace")
+                raise errors.LibreofficeFailure(
+                    f"{errors.LibreofficeFailure.error_message}\n\n"
+                    "LibreOffice exited successfully but did not create the expected PDF "
+                    f"({pdf_filename}). Recent converter output:\n{detail}"
+                )
             try:
                 doc = fitz.open(pdf_filename)
             except (ValueError, fitz.FileDataError):

@@ -431,6 +431,8 @@ class TestCliConversion(TestCliBasic):
 
 class TestExtraFormats(TestCli):
     @for_each_external_doc("*hwp*")
+    # CI flake: LibreOffice + H2ORestart + HWP (#968). Reruns limit noise while logs
+    # and JUnit artifacts capture real failure modes.
     @pytest.mark.flaky(reruns=2)
     def test_hancom_office(self, doc: str) -> None:
         if is_qubes_native_conversion():
